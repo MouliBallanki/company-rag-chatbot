@@ -1,0 +1,14 @@
+[project]
+name = "chatbot-rag"
+version = "0.1.0"
+description = "Service-oriented RAG pipeline"
+requires-python = ">=3.10"
+dependencies = [
+    "pymupdf",
+    "docx2txt",
+    "langchain",
+    "langchain-community",
+    "langchain-text-splitters",
+    "sentence-transformers",
+    "chromadb",
+]

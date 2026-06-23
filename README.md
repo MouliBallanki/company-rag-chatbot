@@ -57,14 +57,19 @@ uv add <package-name>
 Chatbot_RAG/
 ├── services/
 │   ├── embedding_service.py   # EmbeddingService  (sentence-transformers)
-│   ├── chunker_service.py     # ChunkerService    (langchain-text-splitters)
+│   ├── chunker_service.py     # ChunkerService    (heading-aware PDF chunking)
 │   ├── vector_service.py      # VectorService     (ChromaDB)
 │   └── response_service.py    # ResponseService   (LLM extension point)
 ├── ingestion/
 │   ├── parser.py              # LangChain-based loader (PDF, DOCX, CSV, HTML, text…)
 │   └── pipeline.py            # IngestionPipeline — walks full directory tree
 ├── retrieval/
-│   └── pipeline.py            # RetrievalPipeline
+│   └── pipeline.py            # RetrievalPipeline (with distance threshold filter)
+├── tests/
+│   ├── conftest.py            # ML library stubs + shared fixtures
+│   ├── test_chunker_service.py
+│   └── retrieval/
+│       └── test_retrieval_pipeline.py
 ├── data/documents/            # <-- put your files here (any readable file type)
 ├── chroma_db/                 # auto-created vector store
 ├── config.py                  # all settings
@@ -90,9 +95,15 @@ Edit `config.py` to tune:
 |---|---|---|
 | `EMBEDDING_MODEL` | `all-MiniLM-L6-v2` | Sentence-transformer model |
 | `CHUNK_SIZE` | `512` | Characters per chunk |
-| `CHUNK_OVERLAP` | `50` | Overlap between chunks |
+| `CHUNK_OVERLAP` | `100` | Overlap between chunks (increased for policy docs) |
 | `TOP_K` | `5` | Results returned per query |
+| `MAX_DISTANCE_THRESHOLD` | `0.5` | Cosine distance cutoff — results above this are dropped as irrelevant |
 
 ## Adding an LLM
 Open `services/response_service.py` and update `ResponseService.build()` to pass
 `answer_context` to your LLM of choice (OpenAI, Ollama, HuggingFace, etc.).
+
+## Running Tests
+```bash
+uv run pytest tests/ -v
+```

@@ -13,7 +13,7 @@ consumed by an ingestion pipeline and a retrieval pipeline.
 flowchart TD
   subgraph services [Services Layer]
     ES[EmbeddingService\nsentence-transformers]
-    CS[ChunkerService\nlangchain-text-splitters]
+    CS[ChunkerService\nheading-aware chunking]
     VS[VectorService\nChromaDB]
     RS[ResponseService\nformats context]
   end
@@ -28,7 +28,8 @@ flowchart TD
   subgraph retrieval [Retrieval Pipeline]
     Q[User Query] --> ES
     ES --> VS
-    VS --> RS
+    VS --> F[Distance Filter\nmax_distance threshold]
+    F --> RS
     RS --> R[Structured Response\nwith ranked chunks]
   end
 ```
@@ -54,7 +55,7 @@ Chatbot_RAG/
 ├── services/
 │   ├── __init__.py
 │   ├── embedding_service.py      # EmbeddingService
-│   ├── chunker_service.py        # ChunkerService
+│   ├── chunker_service.py        # ChunkerService (heading-aware)
 │   ├── vector_service.py         # VectorService
 │   └── response_service.py       # ResponseService
 ├── ingestion/
@@ -63,7 +64,12 @@ Chatbot_RAG/
 │   └── pipeline.py               # IngestionPipeline (orchestrator)
 ├── retrieval/
 │   ├── __init__.py
-│   └── pipeline.py               # RetrievalPipeline (orchestrator)
+│   └── pipeline.py               # RetrievalPipeline (orchestrator + distance filter)
+├── tests/
+│   ├── conftest.py               # ML library stubs + shared fixtures
+│   ├── test_chunker_service.py   # 37 unit tests for ChunkerService
+│   └── retrieval/
+│       └── test_retrieval_pipeline.py  # 9 unit tests for RetrievalPipeline
 ├── data/
 │   └── documents/                # Drop raw files here
 ├── chroma_db/                    # Auto-created by ChromaDB
@@ -88,11 +94,16 @@ Loads the sentence-transformer model once on init and exposes a single encode me
 
 ### ChunkerService — `services/chunker_service.py`
 
-Splits raw text into overlapping chunks and attaches source metadata.
+Splits raw text into overlapping chunks with heading-aware context prepended.
+Designed for PDF and DOCX policy documents: detects section headings by regex
+and prepends them to every chunk so the LLM always knows which section it reads.
 
 - `__init__(chunk_size, chunk_overlap)` — configures splitter
 - `chunk(text: str, source: str) -> list[dict]`
-  - Each dict: `{ "text": "...", "source": "file.pdf", "chunk_index": 0 }`
+  - Each dict: `{ "text": "[Section: <heading>]\n...", "source": "file.pdf", "chunk_index": 0, "heading": "..." }`
+  - `heading` is empty string if no heading was detected for that chunk
+- `_is_heading(line: str) -> bool` — detects numbered (`1. PURPOSE:`), ALL CAPS, and colon-style headings
+- `_split_into_sections(text: str) -> list[tuple[str, str]]` — partitions text into `(heading, body)` pairs
 
 ### VectorService — `services/vector_service.py`
 
@@ -129,22 +140,27 @@ for each file in directory:
 
 ```
 query_embedding = EmbeddingService.encode([query])[0]
-results         = VectorService.search(query_embedding, top_k)
+raw_results     = VectorService.search(query_embedding, top_k)
+results         = [r for r in raw_results if r["distance"] <= max_distance]
 response        = ResponseService.build(query, results)
 return response
 ```
+
+Results whose cosine distance exceeds `MAX_DISTANCE_THRESHOLD` are dropped before
+being passed to `ResponseService`, preventing irrelevant context from reaching the LLM.
 
 ---
 
 ## Configuration — `config.py`
 
 ```python
-EMBEDDING_MODEL  = "all-MiniLM-L6-v2"
-CHUNK_SIZE       = 512
-CHUNK_OVERLAP    = 50
-CHROMA_PATH      = "./chroma_db"
-COLLECTION_NAME  = "rag_docs"
-TOP_K            = 5
+EMBEDDING_MODEL         = "all-MiniLM-L6-v2"
+CHUNK_SIZE              = 512
+CHUNK_OVERLAP           = 100    # increased for policy documents
+CHROMA_PATH             = "./chroma_db"
+COLLECTION_NAME         = "rag_docs"
+TOP_K                   = 5
+MAX_DISTANCE_THRESHOLD  = 0.5    # cosine distance cutoff; results above this are dropped
 ```
 
 ---
@@ -164,6 +180,9 @@ uv run python ingest.py --dir data/documents
 # Query the pipeline
 uv run python retrieve.py --query "What is the refund policy?"
 
+# Run tests
+uv run pytest tests/ -v
+
 # Add a new package later
 uv add <package-name>
 ```
@@ -176,3 +195,5 @@ uv add <package-name>
 - **Add more file types**: extend `ingestion/parser.py` with new handlers (e.g. `.html`, `.csv`)
 - **Swap vector store**: replace `VectorService` internals with FAISS or Pinecone without touching pipelines
 - **Change embedding model**: update `EMBEDDING_MODEL` in `config.py` — everything else adapts automatically
+- **Tune relevance**: adjust `MAX_DISTANCE_THRESHOLD` in `config.py` (lower = stricter, higher = broader recall)
+- **Font-based heading detection**: upgrade `parser.py` to use `fitz` span metadata for bold/large-font heading detection

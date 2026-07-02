@@ -148,3 +148,27 @@ class TestDistanceThreshold:
         pipeline = _make_pipeline(mock_embedder, mock_vector_store, responder)
         pipeline.run("test query")
         mock_embedder.encode.assert_called_once_with(["test query"])
+
+
+class TestLLMIntegration:
+    def test_pipeline_includes_generated_answer_when_llm_injected(
+        self, mock_embedder, mock_vector_store
+    ) -> None:
+        mock_vector_store.search.return_value = [_make_result(0.2)]
+        mock_llm = MagicMock()
+        mock_llm.generate.return_value = "The leave policy allows 20 days (Source: doc.pdf)."
+        responder = ResponseService(llm=mock_llm)
+        pipeline = _make_pipeline(mock_embedder, mock_vector_store, responder)
+
+        response = pipeline.run("what is the leave policy?")
+
+        assert response["answer"] == mock_llm.generate.return_value
+        mock_llm.generate.assert_called_once()
+
+    def test_pipeline_without_llm_has_answer_key_none(
+        self, mock_embedder, mock_vector_store, responder
+    ) -> None:
+        mock_vector_store.search.return_value = [_make_result(0.2)]
+        pipeline = _make_pipeline(mock_embedder, mock_vector_store, responder)
+        response = pipeline.run("query")
+        assert response["answer"] is None

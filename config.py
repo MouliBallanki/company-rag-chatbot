@@ -12,3 +12,10 @@ TOP_K = 5
 # Results with distance above this threshold are considered irrelevant and dropped.
 # Tune lower (e.g. 0.4) for stricter matching, higher (e.g. 0.6) for broader recall.
 MAX_DISTANCE_THRESHOLD = 0.5
+
+# --- LLM answer generation (Ollama, local — no API key required) ---
+LLM_PROVIDER           = "ollama"
+OLLAMA_MODEL           = "llama3"
+OLLAMA_BASE_URL        = "http://localhost:11434"
+LLM_TIMEOUT            = 60      # seconds to wait for an Ollama response
+LLM_MAX_CONTEXT_CHUNKS = TOP_K   # ranked chunks fed into the LLM prompt

@@ -15,7 +15,8 @@ flowchart TD
     ES[EmbeddingService\nsentence-transformers]
     CS[ChunkerService\nheading-aware chunking]
     VS[VectorService\nChromaDB]
-    RS[ResponseService\nformats context]
+    LS[LLMService\nOllama local HTTP API]
+    RS[ResponseService\nformats context + calls LLM]
   end
 
   subgraph ingestion [Ingestion Pipeline]
@@ -30,7 +31,9 @@ flowchart TD
     ES --> VS
     VS --> F[Distance Filter\nmax_distance threshold]
     F --> RS
-    RS --> R[Structured Response\nwith ranked chunks]
+    RS --> LS
+    LS --> RS
+    RS --> R[Structured Response\nanswer + ranked chunks]
   end
 ```
 
@@ -45,6 +48,7 @@ flowchart TD
 | `langchain-text-splitters`| RecursiveCharacterTextSplitter for chunking  |
 | `sentence-transformers`   | Local embedding model (all-MiniLM-L6-v2)     |
 | `chromadb`                | Local persistent vector store (cosine sim)   |
+| `ollama`                  | Local LLM client for Ollama's HTTP API (answer generation) |
 
 ---
 
@@ -57,6 +61,7 @@ Chatbot_RAG/
 │   ├── embedding_service.py      # EmbeddingService
 │   ├── chunker_service.py        # ChunkerService (heading-aware)
 │   ├── vector_service.py         # VectorService
+│   ├── llm_service.py            # LLMService (Ollama local LLM)
 │   └── response_service.py       # ResponseService
 ├── ingestion/
 │   ├── __init__.py
@@ -68,8 +73,10 @@ Chatbot_RAG/
 ├── tests/
 │   ├── conftest.py               # ML library stubs + shared fixtures
 │   ├── test_chunker_service.py   # 37 unit tests for ChunkerService
+│   ├── test_llm_service.py       # unit tests for LLMService
+│   ├── test_response_service.py  # unit tests for ResponseService
 │   └── retrieval/
-│       └── test_retrieval_pipeline.py  # 9 unit tests for RetrievalPipeline
+│       └── test_retrieval_pipeline.py  # unit tests for RetrievalPipeline
 ├── data/
 │   └── documents/                # Drop raw files here
 ├── chroma_db/                    # Auto-created by ChromaDB
@@ -114,13 +121,27 @@ Wraps ChromaDB. Handles persistence, upsert, and cosine similarity search.
 - `search(query_embedding: list[float], top_k: int) -> list[dict]`
   - Returns: `{ "text", "source", "chunk_index", "distance" }` per result
 
+### LLMService — `services/llm_service.py`
+
+Generates a grounded natural-language answer from ranked retrieval context
+using a local Ollama model. Construction only stores configuration and
+builds the HTTP client — no network call happens until `generate()`.
+
+- `__init__(model, base_url, timeout, max_context_chunks)`
+- `generate(query: str, context: list[dict]) -> str`
+  - Builds a source-labeled, ranked prompt from `context` and calls Ollama's `chat` API
+  - Returns the fallback "not enough information" sentence directly (no network call) if `context` is empty
+  - Raises `LLMServiceError` if Ollama is unreachable or returns an error
+
 ### ResponseService — `services/response_service.py`
 
-Formats vector search results into a structured response object.
-Designed as the LLM extension point — swap in an LLM call here later.
+Formats vector search results into a structured response object, optionally
+enriched with an LLM-generated answer via an injected `LLMService`.
 
+- `__init__(llm: LLMService | None = None)` — LLM is optional; `None` runs in pure-retrieval mode
 - `build(query: str, results: list[dict]) -> dict`
-  - Returns: `{ "query": "...", "answer_context": [...], "sources": [...] }`
+  - Returns: `{ "query": "...", "answer": "..." | None, "answer_context": [...], "sources": [...] }`
+  - If `llm` is injected but `generate()` raises `LLMServiceError`, the failure is logged and `answer` degrades to `None` — `answer_context`/`sources` are still returned intact
 
 ---
 
@@ -148,6 +169,8 @@ return response
 
 Results whose cosine distance exceeds `MAX_DISTANCE_THRESHOLD` are dropped before
 being passed to `ResponseService`, preventing irrelevant context from reaching the LLM.
+`ResponseService.build()` now optionally calls the injected `LLMService` to generate
+`response["answer"]` — `RetrievalPipeline` itself is unchanged and stays a thin orchestrator.
 
 ---
 
@@ -161,6 +184,13 @@ CHROMA_PATH             = "./chroma_db"
 COLLECTION_NAME         = "rag_docs"
 TOP_K                   = 5
 MAX_DISTANCE_THRESHOLD  = 0.5    # cosine distance cutoff; results above this are dropped
+
+# LLM answer generation (Ollama, local — no API key required)
+LLM_PROVIDER            = "ollama"
+OLLAMA_MODEL            = "llama3"
+OLLAMA_BASE_URL         = "http://localhost:11434"
+LLM_TIMEOUT             = 60     # seconds to wait for an Ollama response
+LLM_MAX_CONTEXT_CHUNKS  = TOP_K  # ranked chunks fed into the LLM prompt
 ```
 
 ---
@@ -191,7 +221,10 @@ uv add <package-name>
 
 ## Extension Points
 
-- **Add an LLM**: update `ResponseService.build()` to pass `answer_context` to OpenAI / Ollama / HuggingFace
+- **Add an LLM**: done — `LLMService` (`services/llm_service.py`) generates grounded answers via a local Ollama model, injected into `ResponseService`
+- **Swap LLM provider**: implement a new service alongside `LLMService` (e.g. `OpenAIService`) and inject it into `ResponseService` instead
+- **Stream answers**: use Ollama's `stream=True` chat option and adapt `retrieve.py`'s output loop
+- **Add API-key-based providers**: `config.py` stays non-sensitive; load provider keys via `python-dotenv` + `.env`
 - **Add more file types**: extend `ingestion/parser.py` with new handlers (e.g. `.html`, `.csv`)
 - **Swap vector store**: replace `VectorService` internals with FAISS or Pinecone without touching pipelines
 - **Change embedding model**: update `EMBEDDING_MODEL` in `config.py` — everything else adapts automatically

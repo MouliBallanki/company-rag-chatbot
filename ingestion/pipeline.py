@@ -19,7 +19,7 @@ class IngestionPipeline:
     def __init__(
         self,
         chunker: ChunkerService,
-        embedder: EmbeddingService,
+        embedder: EmbeddingService, 
         vector_store: VectorService,
     ):
         self._chunker = chunker

@@ -11,5 +11,8 @@ dependencies = [
     "langchain-text-splitters",
     "sentence-transformers",
     "chromadb",
+    "fastapi>=0.139.0",
+    "unicorn>=2.1.4",
+    "python-multipart>=0.0.32",
     "ollama",
 ]

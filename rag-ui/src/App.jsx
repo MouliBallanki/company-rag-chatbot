@@ -16,7 +16,10 @@ export default function App() {
 
     try {
       const data = await sendChatQuery(text);
-      const assistantText = data.answer_context.join('\n') || "No reference context found for this query.";
+      const assistantText = data.answer
+        || data.message
+        || data.answer_context.map((c) => c.text).join('\n')
+        || "No reference context found for this query.";
       setMessages((prev) => [
         ...prev,
         { role: 'assistant', text: assistantText, sources: data.sources }

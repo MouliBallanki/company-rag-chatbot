@@ -5,10 +5,13 @@ from pydantic import BaseModel
 
 # 1. Import configurations & pipeline orchestrators
 import config
-from ingestion.pipeline import IngestionPipeline 
+from ingestion.pipeline import IngestionPipeline
 from services.chunker_service import ChunkerService
 from services.embedding_service import EmbeddingService
 from services.vector_service import VectorService
+from services.llm_service import LLMService
+from services.response_service import ResponseService
+from retrieval.pipeline import RetrievalPipeline
 
 router = APIRouter()
 
@@ -18,6 +21,23 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 class QueryRequest(BaseModel):
     query: str
+
+
+# The retrieval pipeline loads an embedding model and opens a ChromaDB
+# connection, so it's built once lazily and reused across requests instead
+# of per-call (mirrors retrieve.py's build_pipeline, but cached).
+_retrieval_pipeline: RetrievalPipeline | None = None
+
+
+def get_retrieval_pipeline() -> RetrievalPipeline:
+    global _retrieval_pipeline
+    if _retrieval_pipeline is None:
+        embedder = EmbeddingService(config.EMBEDDING_MODEL)
+        vector_store = VectorService(config.CHROMA_PATH, config.COLLECTION_NAME)
+        llm = LLMService()
+        responder = ResponseService(llm=llm)
+        _retrieval_pipeline = RetrievalPipeline(embedder, vector_store, responder, top_k=config.TOP_K)
+    return _retrieval_pipeline
 
 @router.post("/api/admin/upload")
 async def upload_documents(files: list[UploadFile] = File(...)):
@@ -60,11 +80,7 @@ async def upload_documents(files: list[UploadFile] = File(...)):
 @router.post("/api/chat")
 async def chat_query(payload: QueryRequest):
     try:
-        # Structured mock response for current runtime safety
-        return {
-            "query": payload.query, 
-            "answer_context": ["Ingestion pipeline is completely live! Ready to build real retrieval next."], 
-            "sources": ["System Verification Engine"]
-        }
+        pipeline = get_retrieval_pipeline()
+        return pipeline.run(payload.query)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
